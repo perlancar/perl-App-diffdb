@@ -11,6 +11,9 @@ use Log::ger;
 our %SPEC;
 
 our %colors = (
+    table_line  => "\e[1m",
+    rownum_line => "\e[36m",
+    colnum_line => "\e[36m",
     delete_line => "\e[31m",
     insert_line => "\e[32m",
     delete_word => "\e[7m",
@@ -18,46 +21,158 @@ our %colors = (
     reset       => "\e[0m",
 );
 
-sub _print_row {
+sub __json_encode {
+    state $json = do {
+        require JSON::MaybeXS;
+        JSON::MaybeXS->new->canonical(1);
+    };
+    $json->encode(shift);
+}
+
+sub _get_row {
+    my ($self, $sth) = @_;
+    my $row = $sth->fetchrow_hashref;
+    return undef unless $row;
+    __json_encode($row);
+}
+
+sub __print_table_line {
+    my ($label1, $label2) = @_;
+    say "$colors{table_line}---$label1$colors{reset}";
+    say "$colors{table_line}+++$label2$colors{reset}";
+}
+
+sub __print_uni_hunk {
+    my ($line1, $num_lines1, $line2, $num_lines2, $hunk) = @_;
+    return unless $num_lines1 || $num_lines2;
+    say "$colors{rownum_line}\@\@-$line1,$num_lines1 +$line2,$num_lines2$colors{reset}";
+    print $hunk;
 }
 
 sub _print_table {
-    my ($dbh, $table, $type) = @_;
-    my $sth = $dbh->prepare("SELECT * FROM ?");
-    $sth->execute($table);
-    if ($type eq 'delete') {
-    } else {
+    my ($self, $dbh, $table, $label1, $label2, $type) = @_;
+    my $sth = $dbh->prepare("SELECT * FROM \"$table\"");
+    $sth->execute;
+
+    __print_table_line($label1, $label2);
+    while (my $row = $self->_get_row($sth)) {
+        if ($type eq 'delete') {
+            say "$colors{delete_line}-$row$colors{reset}";
+        } else {
+            say "$colors{insert_line}+$row$colors{reset}";
+        }
     }
-    $self->_print_row($sth);
-    print $colors{reset}, "\n";
 }
 
-sub _diffdb {
+sub _diff_table {
+    require Algorithm::Diff;
+
+    my ($self, $table) = @_;
+
+    # XXX we should sort by PK first
+    my @rows1;
+    {
+        my $sth = $self->{dbh1}->prepare("SELECT * FROM \"$table\"");
+        $sth->execute;
+        while (my $row = $sth->fetchrow_hashref) {
+            push @rows1, __json_encode($row);
+        }
+    }
+    my @rows2;
+    {
+        my $sth = $self->{dbh2}->prepare("SELECT * FROM \"$table\"");
+        $sth->execute;
+        while (my $row = $sth->fetchrow_hashref) {
+            push @rows2, __json_encode($row);
+        }
+    }
+
+    my $ctx = $self->{num_context_lines};
+
+    my $diff = Algorithm::Diff->new(\@rows1, \@rows2);
+    $diff->Base(1);
+    # form unified-diff hunk which can contain one or more hunks
+    my @uni_hunk; # (line1, num_lines1, line2, num_lines2, hunk)
+    while ($diff->Next) {
+        next if $diff->Same;
+        my ($min1, $max1, $min2, $max2) = $diff->Get(qw/Min1 Max1 Min2 Max2/);
+        if (!@uni_hunk) {
+            @uni_hunk = (1, 0, 1, 0, "");
+        } else {
+            if ($min1 - $ctx > $uni_hunk[0]+$uni_hunk[1]-1) {
+                __print_uni_hunk(@uni_hunk);
+                @uni_hunk = ($min1 - $ctx, 0, $min2 - $ctx, 0, "");
+            } else {
+                for my $i ($uni_hunk[0] .. $min1-$ctx) {
+                    $uni_hunk[4] .= " $rows1[$i-1]\n";
+                    $uni_hunk[1]++;
+                    $uni_hunk[3]++;
+                }
+            }
+        }
+        if ($diff->Items(1)) {
+            for my $i ($min1..$max1) {
+                $uni_hunk[4] .= "-$rows1[$i-1]\n";
+                $uni_hunk[1]++;
+            }
+        }
+        if ($diff->Items(2)) {
+            for my $i ($min2..$max2) {
+                $uni_hunk[4] .= "+$rows2[$i-1]\n";
+                $uni_hunk[3]++;
+            }
+        }
+    }
+    __print_uni_hunk(@uni_hunk);
+}
+
+sub _diff_db {
+    require DBIx::Diff::Schema;
+
     my $self = shift;
 
     my @tables1 = DBIx::Diff::Schema::_list_tables($self->{dbh1});
     my @tables2 = DBIx::Diff::Schema::_list_tables($self->{dbh2});
 
-    my $diff = Algorithm::Diff->new(\@tables1, \@tables2);
-    while ($diff->Next) {
-        for my $same ($diff->Same) {
-            $self->_diff_table($same);
+    # for now, we'll ignore schemas
+    for (@tables1, @tables2) { s/.+\.// }
+
+    my @all_tables = do {
+        my %mem;
+        my @all_tables;
+        for (@tables1, @tables2) {
+            push @all_tables, $_ unless $mem{$_}++;
         }
-        for my $del ($diff->Items(1)) {
-            if ($args{new_table}) {
-                $self->_print_table($self->{dbh1}, $del, 'delete');
+        sort @all_tables;
+    };
+
+    for my $table (@all_tables) {
+        my $in_db1 = grep { $_ eq $table } @tables1;
+        my $in_db2 = grep { $_ eq $table } @tables2;
+        if ($in_db1 && $in_db2) {
+            $self->_diff_table($table);
+        } elsif (!$in_db2) {
+            if ($self->{new_table}) {
+                $self->_print_table(
+                    $self->{dbh1}, $table,
+                    "db1/$table", "db2/$table (doesn't exist)",
+                    'delete');
             } else {
-                say "Only in db1: $del";
+                say "Only in db1: $table";
             }
-        }
-        for my $ins ($diff->Items(2)) {
-            if ($args{new_table}) {
-                $self->_print_table($self->{dbh2}, $ins, 'insert');
+        } else {
+            if ($self->{new_table}) {
+                $self->_print_table(
+                    $self->{dbh2}, $table,
+                    "db1/$table (doesn't exist)", "db2/$table",
+                    'insert');
             } else {
-                say "Only in db2: $ins";
+                say "Only in db2: $table";
             }
         }
     }
+
+    [200];
 }
 
 $SPEC{diffdb} = {
@@ -146,6 +261,11 @@ _
             schema => ['bool*'],
             tags => ['diff'],
         },
+        num_context_lines => {
+            schema => ['int*', min=>0],
+            default => 3,
+            tags => ['diff'],
+        },
 
         # XXX add arg: include table(s) pos=>2 greedy=>1
         # XXX add arg: exclude table(s)
@@ -155,9 +275,11 @@ _
         # XXX add arg: exclude column(s)
         # XXX add arg: include column pattern
         # XXX add arg: exclude column pattern
+        # XXX add arg: table sort
         # XXX add column sort args
         # XXX add row sort args
         # XXX add arg: option to show row as lines, or single-line hash, or single-line array, or single-line CSV/TSV
+        # XXX add arg: new_column
     },
 
     args_rels => {
@@ -175,7 +297,6 @@ _
 };
 sub diffdb {
     require DBI;
-    require DBIx::Diff::Schema;
 
     my %args = @_;
     my $self = bless {%args}, __PACKAGE__;
@@ -197,7 +318,7 @@ sub diffdb {
     unless ($self->{color}) {
         $colors{$_} = "" for keys %colors;
     }
-    $self->_diffdb;
+    $self->_diff_db;
 }
 
 1;
