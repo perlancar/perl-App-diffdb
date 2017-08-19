@@ -185,6 +185,26 @@ colored unified-style diff.
 
 _
     args => {
+        action => {
+            schema => ['str*', in=>[
+                'list_tables1',
+                'list_tables2',
+                'diff_db',
+            ]],
+            default => 'diff_db',
+            cmdline_aliases => {
+                'tables1' => {
+                    summary => 'Shortcut for --action=list_tables1',
+                    is_flag=>1,
+                    code => sub { $_[0]{action} = 'list_tables1' },
+                },
+                'tables2' => {
+                    summary => 'Shortcut for --action=list_tables2',
+                    is_flag=>1,
+                    code => sub { $_[0]{action} = 'list_tables2' },
+                },
+            },
+        },
         dsn1 => {
             summary => 'DBI data source, '.
                 'e.g. "dbi:SQLite:dbname=/path/to/db1.db"',
@@ -292,13 +312,12 @@ _
     links => [
         {url=>'prog:diff'},
     ],
-
-    'cmdline.skip_format' => 1,
 };
 sub diffdb {
     require DBI;
 
     my %args = @_;
+    my $action = $args{action};
     my $self = bless {%args}, __PACKAGE__;
 
     unless ($self->{dbh1}) {
@@ -306,12 +325,25 @@ sub diffdb {
             DBI->connect($args{dsn1}, $args{user1}, $args{password1},
                          {RaiseError=>1});
     }
+    if ($action eq 'list_tables1') {
+        require DBIx::Diff::Schema;
+        return [200, "OK", [
+            map {my $n=$_; $n =~ s/.+\.//; $n} # ignore schemas for now
+                DBIx::Diff::Schema::_list_tables($self->{dbh1})]];
+    }
+
     unless ($self->{dbh2}) {
         $self->{dbh2} =
             DBI->connect($args{dsn2},
                          $args{user2} // $args{user1},
                          $args{password2} // $args{password1},
                          {RaiseError=>1});
+    }
+    if ($action eq 'list_tables2') {
+        require DBIx::Diff::Schema;
+        return [200, "OK", [
+            map {my $n=$_; $n =~ s/.+\.//; $n} # ignore schemas for now
+                DBIx::Diff::Schema::_list_tables($self->{dbh2})]];
     }
 
     $self->{color} //= $ENV{COLOR} // (-t STDOUT);
