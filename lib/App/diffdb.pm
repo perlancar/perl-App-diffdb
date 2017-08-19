@@ -42,13 +42,6 @@ sub __print_table_line {
     say "$colors{table_line}+++$label2$colors{reset}";
 }
 
-sub __print_uni_hunk {
-    my ($line1, $num_lines1, $line2, $num_lines2, $hunk) = @_;
-    return unless $num_lines1 || $num_lines2;
-    say "$colors{rownum_line}\@\@-$line1,$num_lines1 +$line2,$num_lines2$colors{reset}";
-    print $hunk;
-}
-
 sub _print_table {
     my ($self, $dbh, $table, $label1, $label2, $type) = @_;
     my $sth = $dbh->prepare("SELECT * FROM \"$table\"");
@@ -65,7 +58,7 @@ sub _print_table {
 }
 
 sub _diff_table {
-    require Algorithm::Diff;
+    require Text::DiffU;
 
     my ($self, $table) = @_;
 
@@ -87,43 +80,12 @@ sub _diff_table {
         }
     }
 
-    my $ctx = $self->{num_context_lines};
-
-    my $diff = Algorithm::Diff->new(\@rows1, \@rows2);
-    $diff->Base(1);
-    # form unified-diff hunk which can contain one or more hunks
-    my @uni_hunk; # (line1, num_lines1, line2, num_lines2, hunk)
-    while ($diff->Next) {
-        next if $diff->Same;
-        my ($min1, $max1, $min2, $max2) = $diff->Get(qw/Min1 Max1 Min2 Max2/);
-        if (!@uni_hunk) {
-            @uni_hunk = (1, 0, 1, 0, "");
-        } else {
-            if ($min1 - $ctx > $uni_hunk[0]+$uni_hunk[1]-1) {
-                __print_uni_hunk(@uni_hunk);
-                @uni_hunk = ($min1 - $ctx, 0, $min2 - $ctx, 0, "");
-            } else {
-                for my $i ($uni_hunk[0] .. $min1-$ctx) {
-                    $uni_hunk[4] .= " $rows1[$i-1]\n";
-                    $uni_hunk[1]++;
-                    $uni_hunk[3]++;
-                }
-            }
-        }
-        if ($diff->Items(1)) {
-            for my $i ($min1..$max1) {
-                $uni_hunk[4] .= "-$rows1[$i-1]\n";
-                $uni_hunk[1]++;
-            }
-        }
-        if ($diff->Items(2)) {
-            for my $i ($min2..$max2) {
-                $uni_hunk[4] .= "+$rows2[$i-1]\n";
-                $uni_hunk[3]++;
-            }
-        }
-    }
-    __print_uni_hunk(@uni_hunk);
+    print Text::DiffU::diff_u(
+        seq1 => \@rows1,
+        seq2 => \@rows2,
+        seq1_name => "db1/$table",
+        seq2_name => "db2/$table",
+    );
 }
 
 sub _diff_db {
