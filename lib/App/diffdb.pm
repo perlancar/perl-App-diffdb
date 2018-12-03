@@ -338,3 +338,6 @@ Set default for C<--color> option.
 
 
 =head1 SEE ALSO
+
+L<diff-db-schema> from L<App::DiffDBSchemaUtils> which presents the result
+structure from L<DBIx::Diff::Schema> directly.
