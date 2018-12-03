@@ -308,7 +308,10 @@ sub diffdb {
                 DBIx::Diff::Schema::_list_tables($self->{dbh2})]];
     }
 
-    $self->{color} //= $ENV{COLOR} // (-t STDOUT);
+    $self->{color} //=
+        (exists($ENV{NO_COLOR}) ? 0 : undef) //
+        $ENV{COLOR} //
+        (-t STDOUT);
     unless ($self->{color}) {
         $colors{$_} = "" for keys %colors;
     }
@@ -325,6 +328,13 @@ See included script L<diffdb>.
 
 =head1 ENVIRONMENT
 
+=head2 NO_COLOR
+
+Disable color. See L<https://no-color.org>.
+
 =head2 COLOR => bool
 
 Set default for C<--color> option.
+
+
+=head1 SEE ALSO
