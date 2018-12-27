@@ -265,10 +265,6 @@ _
     },
 
     args_rels => {
-        'req_one&' => [
-            [qw/dsn1 dbh1/],
-            [qw/dsn2 dbh2/],
-        ],
     },
 
     links => [
@@ -308,7 +304,18 @@ sub diffdb {
                 DBIx::Diff::Schema::_list_tables($self->{dbh2})]];
     }
 
-    $self->{color} //= $ENV{COLOR} // (-t STDOUT);
+    return [400, "Please specify dsn1/dbh1 and dsn2/dbh2"]
+        unless $self->{dbh1} && $self->{dbh2};
+
+    $self->{color} //= do {
+        if (exists $ENV{NO_COLOR}) {
+            0;
+        } elsif (defined $ENV{COLOR}) {
+            $ENV{COLOR};
+        } else {
+            (-t STDOUT);
+        }
+    };
     unless ($self->{color}) {
         $colors{$_} = "" for keys %colors;
     }
@@ -325,6 +332,10 @@ See included script L<diffdb>.
 
 =head1 ENVIRONMENT
 
-=head2 COLOR => bool
+=head2 NO_COLOR
 
-Set default for C<--color> option.
+Can be set (to any value) to disable color. Consulted before L</COLOR>.
+
+=head2 COLOR
+
+Bool. Set default for C<--color> option.
