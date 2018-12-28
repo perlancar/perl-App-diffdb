@@ -334,8 +334,15 @@ See included script L<diffdb>.
 
 =head2 NO_COLOR
 
-Can be set (to any value) to disable color. Consulted before L</COLOR>.
+Can be set (to any value) to disable color. Consulted before L</COLOR>. See
+L<https://no-color.org>.
 
 =head2 COLOR
 
 Bool. Set default for C<--color> option.
+
+
+=head1 SEE ALSO
+
+L<diff-db-schema> from L<App::DiffDBSchemaUtils> which presents the result
+structure from L<DBIx::Diff::Schema> directly.
