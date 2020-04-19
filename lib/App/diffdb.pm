@@ -1,6 +1,8 @@
 package App::diffdb;
 
+# AUTHORITY
 # DATE
+# DIST
 # VERSION
 
 use 5.010001;
@@ -8,18 +10,9 @@ use strict;
 use warnings;
 use Log::ger;
 
-our %SPEC;
+#use File::Slurper qw(read_text write_text);
 
-our %colors = (
-    table_line  => "\e[1m",
-    rownum_line => "\e[36m",
-    colnum_line => "\e[36m",
-    delete_line => "\e[31m",
-    insert_line => "\e[32m",
-    delete_word => "\e[7m",
-    insert_word => "\e[7m",
-    reset       => "\e[0m",
-);
+our %SPEC;
 
 sub __json_encode {
     state $json = do {
@@ -33,58 +26,46 @@ sub _get_row {
     my ($self, $sth) = @_;
     my $row = $sth->fetchrow_hashref;
     return undef unless $row;
-    __json_encode($row);
-}
-
-sub __print_table_line {
-    my ($label1, $label2) = @_;
-    say "$colors{table_line}---$label1$colors{reset}";
-    say "$colors{table_line}+++$label2$colors{reset}";
-}
-
-sub _print_table {
-    my ($self, $dbh, $table, $label1, $label2, $type) = @_;
-    my $sth = $dbh->prepare("SELECT * FROM \"$table\"");
-    $sth->execute;
-
-    __print_table_line($label1, $label2);
-    while (my $row = $self->_get_row($sth)) {
-        if ($type eq 'delete') {
-            say "$colors{delete_line}-$row$colors{reset}";
-        } else {
-            say "$colors{insert_line}+$row$colors{reset}";
-        }
-    }
+    my $res = __json_encode($row);
+    $res .= "\n" unless $res =~ /\R\z/;
+    $res;
 }
 
 sub _diff_table {
-    require Text::DiffU;
+    require IPC::System::Options;
 
-    my ($self, $table) = @_;
+    my ($self, $table, $table1_exists, $table2_exists) = @_;
 
-    # XXX we should sort by PK first
-    my @rows1;
-    {
+    my $fname1 = "$self->{tempdir}/db1.$table".($table1_exists ? '' : '.doesnt_exist');
+  CREATE_FILE1: {
+        open my $fh, ">", $fname1;
+        last unless $table1_exists;
+
+        # XXX sort by PK
         my $sth = $self->{dbh1}->prepare("SELECT * FROM \"$table\"");
         $sth->execute;
-        while (my $row = $sth->fetchrow_hashref) {
-            push @rows1, __json_encode($row);
-        }
-    }
-    my @rows2;
-    {
-        my $sth = $self->{dbh2}->prepare("SELECT * FROM \"$table\"");
-        $sth->execute;
-        while (my $row = $sth->fetchrow_hashref) {
-            push @rows2, __json_encode($row);
+        while (my $row = $self->_get_row($sth)) {
+            print $fh $row;
         }
     }
 
-    print Text::DiffU::diff_u(
-        seq1 => \@rows1,
-        seq2 => \@rows2,
-        seq1_name => "db1/$table",
-        seq2_name => "db2/$table",
+    my $fname2 = "$self->{tempdir}/db2.$table".($table2_exists ? '' : '.doesnt_exist');
+  CREATE_FILE2: {
+        open my $fh, ">", $fname2;
+        last unless $table2_exists;
+
+        # XXX sort by PK
+        my $sth = $self->{dbh2}->prepare("SELECT * FROM \"$table\"");
+        $sth->execute;
+        while (my $row = $self->_get_row($sth)) {
+            print $fh $row;
+        }
+    }
+
+    IPC::System::Options::system(
+        {log=>1},
+        $self->{diff_command}, "-u",
+        $fname1, $fname2,
     );
 }
 
@@ -93,8 +74,8 @@ sub _diff_db {
 
     my $self = shift;
 
-    my @tables1 = DBIx::Diff::Schema::_list_tables($self->{dbh1});
-    my @tables2 = DBIx::Diff::Schema::_list_tables($self->{dbh2});
+    my @tables1 = DBIx::Diff::Schema::list_tables($self->{dbh1});
+    my @tables2 = DBIx::Diff::Schema::list_tables($self->{dbh2});
 
     # for now, we'll ignore schemas
     for (@tables1, @tables2) { s/.+\.// }
@@ -112,25 +93,11 @@ sub _diff_db {
         my $in_db1 = grep { $_ eq $table } @tables1;
         my $in_db2 = grep { $_ eq $table } @tables2;
         if ($in_db1 && $in_db2) {
-            $self->_diff_table($table);
+            $self->_diff_table($table, 1, 1);
         } elsif (!$in_db2) {
-            if ($self->{new_table}) {
-                $self->_print_table(
-                    $self->{dbh1}, $table,
-                    "db1/$table", "db2/$table (doesn't exist)",
-                    'delete');
-            } else {
-                say "Only in db1: $table";
-            }
+            $self->_diff_table($table, 1, 0);
         } else {
-            if ($self->{new_table}) {
-                $self->_print_table(
-                    $self->{dbh2}, $table,
-                    "db1/$table (doesn't exist)", "db2/$table",
-                    'insert');
-            } else {
-                say "Only in db2: $table";
-            }
+            $self->_diff_table($table, 0, 1);
         }
     }
 
@@ -229,24 +196,9 @@ _
             tags => ['connection', 'hidden-cli'],
         },
 
-        new_table => {
-            schema => ['bool*', is=>1],
-            cmdline_aliases => {N=>{}},
-            tags => ['diff'],
-            description => <<'_',
-
-This is analogous to the `--new-file` (`-N`) *diff* option.
-
-_
-        },
-        color => {
-            schema => ['bool*'],
-            tags => ['diff'],
-        },
-        num_context_lines => {
-            schema => ['int*', min=>0],
-            default => 3,
-            tags => ['diff'],
+        diff_command => {
+            schema => 'str*', # XXX prog
+            default => 'diff',
         },
 
         # XXX add arg: include table(s) pos=>2 greedy=>1
@@ -264,6 +216,8 @@ _
         # XXX add arg: new_column
     },
 
+    "cmdline.skip_format" => 1,
+
     args_rels => {
     },
 
@@ -273,6 +227,7 @@ _
 };
 sub diffdb {
     require DBI;
+    require File::Temp;
 
     my %args = @_;
     my $action = $args{action};
@@ -285,9 +240,11 @@ sub diffdb {
     }
     if ($action eq 'list_tables1') {
         require DBIx::Diff::Schema;
-        return [200, "OK", [
-            map {my $n=$_; $n =~ s/.+\.//; $n} # ignore schemas for now
-                DBIx::Diff::Schema::_list_tables($self->{dbh1})]];
+        for (DBIx::Diff::Schema::list_tables($self->{dbh1})) {
+            s/.+\.//; # ignore schema for now
+            print "$_\n";
+        }
+        return [200];
     }
 
     unless ($self->{dbh2}) {
@@ -299,26 +256,19 @@ sub diffdb {
     }
     if ($action eq 'list_tables2') {
         require DBIx::Diff::Schema;
-        return [200, "OK", [
-            map {my $n=$_; $n =~ s/.+\.//; $n} # ignore schemas for now
-                DBIx::Diff::Schema::_list_tables($self->{dbh2})]];
+        for (DBIx::Diff::Schema::list_tables($self->{dbh2})) {
+            s/.+\.//; # ignore schema for now
+            print "$_\n";
+        }
+        return [200];
     }
 
     return [400, "Please specify dsn1/dbh1 and dsn2/dbh2"]
         unless $self->{dbh1} && $self->{dbh2};
 
-    $self->{color} //= do {
-        if (exists $ENV{NO_COLOR}) {
-            0;
-        } elsif (defined $ENV{COLOR}) {
-            $ENV{COLOR};
-        } else {
-            (-t STDOUT);
-        }
-    };
-    unless ($self->{color}) {
-        $colors{$_} = "" for keys %colors;
-    }
+    $self->{tempdir} = File::Temp::tempdir(CLEANUP => $ENV{DEBUG});
+    $self->{diff_command} = $args{diff_command} // 'diff';
+
     $self->_diff_db;
 }
 
@@ -332,17 +282,13 @@ See included script L<diffdb>.
 
 =head1 ENVIRONMENT
 
-=head2 NO_COLOR
+=head2 DEBUG
 
-Can be set (to any value) to disable color. Consulted before L</COLOR>. See
-L<https://no-color.org>.
-
-=head2 COLOR
-
-Bool. Set default for C<--color> option.
+Bool. If set to true, temporary directory is not cleaned up at the end of
+runtime.
 
 
-=head1 SEE ALSO
+=head1 prepend:SEE ALSO
 
 L<diff-db-schema> from L<App::DiffDBSchemaUtils> which presents the result
 structure from L<DBIx::Diff::Schema> directly.
