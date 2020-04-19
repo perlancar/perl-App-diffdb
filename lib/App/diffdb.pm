@@ -342,8 +342,8 @@ _
 sub diffdb_sqlite {
     my %args = @_;
 
-    my $dsn1 = "dbi:SQLite:dbname=".delete($args{dbpath1});
-    my $dsn2 = "dbi:SQLite:dbname=".delete($args{dbpath2});
+    my $dsn1 = defined $args{dbpath1} ? "dbi:SQLite:dbname=".delete($args{dbpath1}) : undef;
+    my $dsn2 = defined $args{dbpath2} ? "dbi:SQLite:dbname=".delete($args{dbpath2}) : undef;
     diffdb(
         %args,
         dsn1 => $dsn1,
