@@ -39,6 +39,10 @@ our %args_common = (
         schema => 'str*', # XXX prog
         default => 'diff',
     },
+    row_as => {
+        schema => ['str*', in=>['json-one-line', 'json-card']], # XXX yaml, csv, tsv, ...
+        default => 'json-card',
+    },
 
     # XXX add arg: include table(s) pos=>2 greedy=>1
     # XXX add arg: exclude table(s)
@@ -51,7 +55,6 @@ our %args_common = (
     # XXX add arg: table sort
     # XXX add column sort args
     # XXX add row sort args
-    # XXX add arg: option to show row as lines, or single-line hash, or single-line array, or single-line CSV/TSV
 );
 
 our %args_connect_dbi = (
@@ -59,25 +62,25 @@ our %args_connect_dbi = (
         summary => 'DBI data source, '.
             'e.g. "dbi:SQLite:dbname=/path/to/db1.db"',
         schema => 'str*',
-        tags => ['connection'],
+        tags => ['category:connection'],
         pos => 0,
     },
     dsn2 => {
         summary => 'DBI data source, '.
             'e.g. "dbi:SQLite:dbname=/path/to/db1.db"',
         schema => 'str*',
-        tags => ['connection'],
+        tags => ['category:connection'],
         pos => 1,
     },
     user1 => {
         schema => 'str*',
         cmdline_aliases => {user=>{}, u=>{}},
-        tags => ['connection'],
+        tags => ['category:connection'],
     },
     password1 => {
         schema => 'str*',
         cmdline_aliases => {password=>{}, p=>{}},
-        tags => ['connection'],
+        tags => ['category:connection'],
         description => <<'_',
 
 You might want to specify this parameter in a configuration file instead of
@@ -92,7 +95,7 @@ _
 Will default to `user1` if `user1` is specified.
 
 _
-        tags => ['connection'],
+        tags => ['category:connection'],
     },
     password2 => {
         schema => 'str*',
@@ -104,17 +107,17 @@ You might want to specify this parameter in a configuration file instead of
 directly as command-line option.
 
 _
-        tags => ['connection'],
+        tags => ['category:connection'],
     },
     dbh1 => {
         summary => 'Alternative to specifying dsn1/user1/password1',
         schema => 'obj*',
-        tags => ['connection', 'hidden-cli'],
+        tags => ['category:connection', 'hidden-cli'],
     },
     dbh2 => {
         summary => 'Alternative to specifying dsn2/user2/password2',
         schema => 'obj*',
-        tags => ['connection', 'hidden-cli'],
+        tags => ['category:connection', 'hidden-cli'],
     },
 );
 
@@ -122,13 +125,13 @@ our %args_connect_sqlite = (
     dbpath1 => {
         summary => 'First SQLite database file',
         schema => 'filename*',
-        tags => ['connection'],
+        tags => ['category:connection'],
         pos => 0,
     },
     dbpath2 => {
         summary => 'Second SQLite database file',
         schema => 'filename*',
-        tags => ['connection'],
+        tags => ['category:connection'],
         pos => 1,
     },
 );
@@ -136,18 +139,29 @@ our %args_connect_sqlite = (
 sub __json_encode {
     state $json = do {
         require JSON::MaybeXS;
-        JSON::MaybeXS->new->canonical(1);
+        JSON::MaybeXS->new->allow_nonref(1)->canonical(1);
     };
     $json->encode(shift);
 }
 
 sub _get_row {
-    my ($self, $sth) = @_;
+    my ($self, $rownum, $sth) = @_;
     my $row = $sth->fetchrow_hashref;
     return undef unless $row;
-    my $res = __json_encode($row);
-    $res .= "\n" unless $res =~ /\R\z/;
-    $res;
+    if ($self->{row_as} eq 'json-one-line') {
+        my $res = __json_encode($row);
+        $res .= "\n" unless $res =~ /\R\z/;
+        $res;
+    } elsif ($self->{row_as} eq 'json-card') {
+        my $res = join(
+            "",
+            "Row #$rownum:\n",
+            (map { "  $_: ".__json_encode($row->{$_})."\n" } sort keys %$row),
+            "---\n",
+        );
+    } else {
+        die "Uknown 'row_as' value '$self->{row_as}'";
+    }
 }
 
 sub _diff_table {
@@ -163,7 +177,11 @@ sub _diff_table {
         # XXX sort by PK
         my $sth = $self->{dbh1}->prepare("SELECT * FROM \"$table\"");
         $sth->execute;
-        while (my $row = $self->_get_row($sth)) {
+        my $rownum = 0;
+        while (1) {
+            $rownum++;
+            my $row = $self->_get_row($rownum, $sth);
+            last unless defined $row;
             print $fh $row;
         }
     }
@@ -176,7 +194,11 @@ sub _diff_table {
         # XXX sort by PK
         my $sth = $self->{dbh2}->prepare("SELECT * FROM \"$table\"");
         $sth->execute;
-        while (my $row = $self->_get_row($sth)) {
+        my $rownum = 0;
+        while (1) {
+            $rownum++;
+            my $row = $self->_get_row($rownum, $sth);
+            last unless defined $row;
             print $fh $row;
         }
     }
@@ -289,6 +311,7 @@ sub diffdb {
 
     $self->{tempdir} = File::Temp::tempdir(CLEANUP => $ENV{DEBUG});
     $self->{diff_command} = $args{diff_command} // 'diff';
+    $self->{row_as} = $args{row_as} // 'one-line-json';
 
     $self->_diff_db;
 }
