@@ -14,6 +14,125 @@ use Log::ger;
 
 our %SPEC;
 
+our %args_common = (
+    action => {
+        schema => ['str*', in=>[
+            'list_tables1',
+            'list_tables2',
+            'diff_db',
+        ]],
+        default => 'diff_db',
+        cmdline_aliases => {
+            'tables1' => {
+                summary => 'Shortcut for --action=list_tables1',
+                is_flag=>1,
+                code => sub { $_[0]{action} = 'list_tables1' },
+            },
+            'tables2' => {
+                summary => 'Shortcut for --action=list_tables2',
+                is_flag=>1,
+                code => sub { $_[0]{action} = 'list_tables2' },
+            },
+        },
+    },
+    diff_command => {
+        schema => 'str*', # XXX prog
+        default => 'diff',
+    },
+
+    # XXX add arg: include table(s) pos=>2 greedy=>1
+    # XXX add arg: exclude table(s)
+    # XXX add arg: include table pattern
+    # XXX add arg: exclude table pattern
+    # XXX add arg: include column(s)
+    # XXX add arg: exclude column(s)
+    # XXX add arg: include column pattern
+    # XXX add arg: exclude column pattern
+    # XXX add arg: table sort
+    # XXX add column sort args
+    # XXX add row sort args
+    # XXX add arg: option to show row as lines, or single-line hash, or single-line array, or single-line CSV/TSV
+);
+
+our %args_connect_dbi = (
+    dsn1 => {
+        summary => 'DBI data source, '.
+            'e.g. "dbi:SQLite:dbname=/path/to/db1.db"',
+        schema => 'str*',
+        tags => ['connection'],
+        pos => 0,
+    },
+    dsn2 => {
+        summary => 'DBI data source, '.
+            'e.g. "dbi:SQLite:dbname=/path/to/db1.db"',
+        schema => 'str*',
+        tags => ['connection'],
+        pos => 1,
+    },
+    user1 => {
+        schema => 'str*',
+        cmdline_aliases => {user=>{}, u=>{}},
+        tags => ['connection'],
+    },
+    password1 => {
+        schema => 'str*',
+        cmdline_aliases => {password=>{}, p=>{}},
+        tags => ['connection'],
+        description => <<'_',
+
+You might want to specify this parameter in a configuration file instead of
+directly as command-line option.
+
+_
+        },
+    user2 => {
+        schema => 'str*',
+        description => <<'_',
+
+Will default to `user1` if `user1` is specified.
+
+_
+        tags => ['connection'],
+    },
+    password2 => {
+        schema => 'str*',
+        description => <<'_',
+
+Will default to `password1` if `password1` is specified.
+
+You might want to specify this parameter in a configuration file instead of
+directly as command-line option.
+
+_
+        tags => ['connection'],
+    },
+    dbh1 => {
+        summary => 'Alternative to specifying dsn1/user1/password1',
+        schema => 'obj*',
+        tags => ['connection', 'hidden-cli'],
+    },
+    dbh2 => {
+        summary => 'Alternative to specifying dsn2/user2/password2',
+        schema => 'obj*',
+        tags => ['connection', 'hidden-cli'],
+    },
+);
+
+our %args_connect_sqlite = (
+    dbpath1 => {
+        summary => 'First SQLite database file',
+        schema => 'filename*',
+        tags => ['connection'],
+        pos => 0,
+    },
+    dbpath2 => {
+        summary => 'Second SQLite database file',
+        schema => 'filename*',
+        tags => ['connection'],
+        pos => 1,
+    },
+);
+
 sub __json_encode {
     state $json = do {
         require JSON::MaybeXS;
@@ -114,106 +233,8 @@ colored unified-style diff.
 
 _
     args => {
-        action => {
-            schema => ['str*', in=>[
-                'list_tables1',
-                'list_tables2',
-                'diff_db',
-            ]],
-            default => 'diff_db',
-            cmdline_aliases => {
-                'tables1' => {
-                    summary => 'Shortcut for --action=list_tables1',
-                    is_flag=>1,
-                    code => sub { $_[0]{action} = 'list_tables1' },
-                },
-                'tables2' => {
-                    summary => 'Shortcut for --action=list_tables2',
-                    is_flag=>1,
-                    code => sub { $_[0]{action} = 'list_tables2' },
-                },
-            },
-        },
-        dsn1 => {
-            summary => 'DBI data source, '.
-                'e.g. "dbi:SQLite:dbname=/path/to/db1.db"',
-            schema => 'str*',
-            tags => ['connection'],
-            pos => 0,
-        },
-        dsn2 => {
-            summary => 'DBI data source, '.
-                'e.g. "dbi:SQLite:dbname=/path/to/db1.db"',
-            schema => 'str*',
-            tags => ['connection'],
-            pos => 1,
-        },
-        user1 => {
-            schema => 'str*',
-            cmdline_aliases => {user=>{}, u=>{}},
-            tags => ['connection'],
-        },
-        password1 => {
-            schema => 'str*',
-            cmdline_aliases => {password=>{}, p=>{}},
-            tags => ['connection'],
-            description => <<'_',
-
-You might want to specify this parameter in a configuration file instead of
-directly as command-line option.
-
-_
-        },
-        user2 => {
-            schema => 'str*',
-            description => <<'_',
-
-Will default to `user1` if `user1` is specified.
-
-_
-            tags => ['connection'],
-        },
-        password2 => {
-            schema => 'str*',
-            description => <<'_',
-
-Will default to `password1` if `password1` is specified.
-
-You might want to specify this parameter in a configuration file instead of
-directly as command-line option.
-
-_
-            tags => ['connection'],
-        },
-        dbh1 => {
-            summary => 'Alternative to specifying dsn1/user1/password1',
-            schema => 'obj*',
-            tags => ['connection', 'hidden-cli'],
-        },
-        dbh2 => {
-            summary => 'Alternative to specifying dsn2/user2/password2',
-            schema => 'obj*',
-            tags => ['connection', 'hidden-cli'],
-        },
-
-        diff_command => {
-            schema => 'str*', # XXX prog
-            default => 'diff',
-        },
-
-        # XXX add arg: include table(s) pos=>2 greedy=>1
-        # XXX add arg: exclude table(s)
-        # XXX add arg: include table pattern
-        # XXX add arg: exclude table pattern
-        # XXX add arg: include column(s)
-        # XXX add arg: exclude column(s)
-        # XXX add arg: include column pattern
-        # XXX add arg: exclude column pattern
-        # XXX add arg: table sort
-        # XXX add column sort args
-        # XXX add row sort args
-        # XXX add arg: option to show row as lines, or single-line hash, or single-line array, or single-line CSV/TSV
-        # XXX add arg: new_column
+        %args_common,
+        %args_connect_dbi,
     },
 
     "cmdline.skip_format" => 1,
@@ -272,12 +293,47 @@ sub diffdb {
     $self->_diff_db;
 }
 
+$SPEC{diffdb_sqlite} = {
+    v => 1.1,
+    summary => 'Compare two SQLite databases, line by line',
+    'description.alt.env.cmdline' => <<'_',
+
+This utility compares two SQLite databases and displays the result as the
+familiar colored unified-style diff.
+
+_
+    args => {
+        %args_common,
+        %args_connect_sqlite,
+    },
+
+    "cmdline.skip_format" => 1,
+
+    args_rels => {
+    },
+
+    links => [
+        {url=>'prog:diff'},
+    ],
+};
+sub diffdb_sqlite {
+    my %args = @_;
+
+    my $dsn1 = "dbi:SQLite:dbname=".delete($args{dbpath1});
+    my $dsn2 = "dbi:SQLite:dbname=".delete($args{dbpath2});
+    diffdb(
+        %args,
+        dsn1 => $dsn1,
+        dsn2 => $dsn2,
+    );
+}
+
 1;
 #ABSTRACT:
 
 =head1 SYNOPSIS
 
-See included script L<diffdb>.
+See included scripts L<diffdb>, L<diffdb-sqlite>, ...
 
 
 =head1 ENVIRONMENT
