@@ -367,7 +367,7 @@ Bool. If set to true, temporary directory is not cleaned up at the end of
 runtime.
 
 
-=head1 prepend:SEE ALSO
+=head1 SEE ALSO
 
 L<diff-db-schema> from L<App::DiffDBSchemaUtils> which presents the result
 structure from L<DBIx::Diff::Schema> directly.
