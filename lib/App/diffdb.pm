@@ -140,32 +140,39 @@ our %args_diff = (
         'x.name.singular' => 'include_table',
         schema => ['array*', of=>'str*'], # XXX completion
         cmdline_aliases => {t=>{}},
-        tags => ['category:filtering'],
+        tags => ['category:table-selection'],
     },
     exclude_tables => {
         'x.name.is_plural' => 1,
         'x.name.singular' => 'exclude_table',
         schema => ['array*', of=>'str*'], # XXX completion
         cmdline_aliases => {T=>{}},
-        tags => ['category:filtering'],
+        tags => ['category:table-selection'],
     },
+    sql => {
+        summary => 'Compare the result of SQL select query, instead of tables',
+        schema => 'str*',
+        tags => ['category:table-selection'],
+    },
+
     include_columns => {
         'x.name.is_plural' => 1,
         'x.name.singular' => 'include_column',
         schema => ['array*', of=>'str*'], # XXX completion
         cmdline_aliases => {c=>{}},
-        tags => ['category:filtering'],
+        tags => ['category:column-selection'],
     },
     exclude_columns => {
         'x.name.is_plural' => 1,
         'x.name.singular' => 'exclude_column',
         schema => ['array*', of=>'str*'], # XXX completion
         cmdline_aliases => {C=>{}},
-        tags => ['category:filtering'],
+        tags => ['category:column-selection'],
     },
+
     order_by => {
         schema => ['str*'],
-        tags => ['category:ordering'],
+        tags => ['category:row-ordering'],
     },
 );
 
@@ -197,9 +204,52 @@ sub _get_row {
     }
 }
 
+sub _diff_file {
+    require IPC::System::Options;
+
+    my ($self, $fname1, $fname2) = @_;
+    IPC::System::Options::system(
+        {log=>1},
+        $self->{diff_command}, "-u",
+        $fname1, $fname2,
+    );
+}
+
+sub _write_result {
+    my ($self, $sth, $fh) = @_;
+    my $rownum = 0;
+    while (1) {
+        $rownum++;
+        my $row = $self->_get_row($rownum, $sth);
+        last unless defined $row;
+        print $fh $row;
+    }
+}
+
+sub _diff_query {
+    my ($self, $query) = @_;
+
+    my $fname1 = "$self->{tempdir}/db1.query";
+  CREATE_FILE1: {
+        open my $fh, ">", $fname1;
+        my $sth = $self->{dbh1}->prepare($query);
+        $sth->execute;
+        $self->_write_result($sth, $fh);
+    };
+
+    my $fname2 = "$self->{tempdir}/db2.query";
+  CREATE_FILE2: {
+        open my $fh, ">", $fname2;
+        my $sth = $self->{dbh2}->prepare($query);
+        $sth->execute;
+        $self->_write_result($sth, $fh);
+    };
+
+    $self->_diff_file($fname1, $fname2);
+}
+
 sub _diff_table {
     require DBIx::Diff::Schema;
-    require IPC::System::Options;
 
     my ($self, $table, $table1_exists, $table2_exists) = @_;
 
@@ -231,18 +281,11 @@ sub _diff_table {
                 $order_by = join(",", map {qq("$_")} @{ $indexes[0]{columns} });
             }
         }
-
         my $sth = $self->{dbh1}->prepare(
             "SELECT ".join(",", map {qq("$_->{COLUMN_NAME}")} @columns).
                 " FROM \"$table\"".($order_by ? " ORDER BY $order_by" : ""));
         $sth->execute;
-        my $rownum = 0;
-        while (1) {
-            $rownum++;
-            my $row = $self->_get_row($rownum, $sth);
-            last unless defined $row;
-            print $fh $row;
-        }
+        $self->_write_result($sth, $fh);
     }
 
     my $fname2 = "$self->{tempdir}/db2.$table".($table2_exists ? '' : '.doesnt_exist');
@@ -267,20 +310,10 @@ sub _diff_table {
             "SELECT ".join(",", map {qq("$_->{COLUMN_NAME}")} @columns).
                 " FROM \"$table\"".($order_by ? " ORDER BY $order_by" : ""));
         $sth->execute;
-        my $rownum = 0;
-        while (1) {
-            $rownum++;
-            my $row = $self->_get_row($rownum, $sth);
-            last unless defined $row;
-            print $fh $row;
-        }
+        $self->_write_result($sth, $fh);
     }
 
-    IPC::System::Options::system(
-        {log=>1},
-        $self->{diff_command}, "-u",
-        $fname1, $fname2,
-    );
+    $self->_diff_file($fname1, $fname2);
 }
 
 sub _diff_db {
@@ -303,28 +336,37 @@ sub _diff_db {
         sort @all_tables;
     };
 
+  SQL:
+    {
+        last unless $self->{sql};
+        $self->_diff_query($self->{sql});
+    }
+
   TABLE:
-    for my $table (@all_tables) {
-        if ($self->{include_tables} && @{ $self->{include_tables} }) {
-            unless (grep { $_ eq $table } @{ $self->{include_tables} }) {
-                log_trace "Skipping table $table (not in include_tables)";
-                next TABLE;
+    {
+        last if $self->{sql};
+        for my $table (@all_tables) {
+            if ($self->{include_tables} && @{ $self->{include_tables} }) {
+                unless (grep { $_ eq $table } @{ $self->{include_tables} }) {
+                    log_trace "Skipping table $table (not in include_tables)";
+                    next TABLE;
+                }
             }
-        }
-        if ($self->{exclude_tables} && @{ $self->{exclude_tables} }) {
-            if (grep { $_ eq $table } @{ $self->{exclude_tables} }) {
-                log_trace "Skipping table $table (in exclude_tables)";
-                next TABLE;
+            if ($self->{exclude_tables} && @{ $self->{exclude_tables} }) {
+                if (grep { $_ eq $table } @{ $self->{exclude_tables} }) {
+                    log_trace "Skipping table $table (in exclude_tables)";
+                    next TABLE;
+                }
             }
-        }
-        my $in_db1 = grep { $_ eq $table } @tables1;
-        my $in_db2 = grep { $_ eq $table } @tables2;
-        if ($in_db1 && $in_db2) {
-            $self->_diff_table($table, 1, 1);
-        } elsif (!$in_db2) {
-            $self->_diff_table($table, 1, 0);
-        } else {
-            $self->_diff_table($table, 0, 1);
+            my $in_db1 = grep { $_ eq $table } @tables1;
+            my $in_db2 = grep { $_ eq $table } @tables2;
+            if ($in_db1 && $in_db2) {
+                $self->_diff_table($table, 1, 1);
+            } elsif (!$in_db2) {
+                $self->_diff_table($table, 1, 0);
+            } else {
+                $self->_diff_table($table, 0, 1);
+            }
         }
     }
 
