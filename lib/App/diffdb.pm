@@ -41,11 +41,23 @@ our %args_common = (
     },
     row_as => {
         schema => ['str*', in=>['json-one-line', 'json-card']], # XXX yaml, csv, tsv, ...
-        default => 'json-card',
+        default => 'json-one-line',
+    },
+    include_tables => {
+        'x.name.is_plural' => 1,
+        'x.name.singular' => 'include_table',
+        schema => ['array*', of=>'str*'], # XXX completion
+        cmdline_aliases => {t=>{}},
+        tags => ['category:filtering'],
+    },
+    exclude_tables => {
+        'x.name.is_plural' => 1,
+        'x.name.singular' => 'exclude_table',
+        schema => ['array*', of=>'str*'], # XXX completion
+        cmdline_aliases => {T=>{}},
+        tags => ['category:filtering'],
     },
 
-    # XXX add arg: include table(s) pos=>2 greedy=>1
-    # XXX add arg: exclude table(s)
     # XXX add arg: include table pattern
     # XXX add arg: exclude table pattern
     # XXX add arg: include column(s)
@@ -165,6 +177,7 @@ sub _get_row {
 }
 
 sub _diff_table {
+    require DBIx::Diff::Schema;
     require IPC::System::Options;
 
     my ($self, $table, $table1_exists, $table2_exists) = @_;
@@ -174,8 +187,16 @@ sub _diff_table {
         open my $fh, ">", $fname1;
         last unless $table1_exists;
 
-        # XXX sort by PK
-        my $sth = $self->{dbh1}->prepare("SELECT * FROM \"$table\"");
+        my @indexes = grep { $_->{is_unique} }
+            DBIx::Diff::Schema::list_table_indexes(
+            $self->{dbh1}, $table);
+        my $cols_s = '';
+        if (@indexes) {
+            $cols_s = join(",", map {qq("$_")} @{ $indexes[0]{columns} });
+        }
+
+        my $sth = $self->{dbh1}->prepare(
+            "SELECT * FROM \"$table\"".($cols_s ? " ORDER BY $cols_s" : ""));
         $sth->execute;
         my $rownum = 0;
         while (1) {
@@ -191,8 +212,16 @@ sub _diff_table {
         open my $fh, ">", $fname2;
         last unless $table2_exists;
 
-        # XXX sort by PK
-        my $sth = $self->{dbh2}->prepare("SELECT * FROM \"$table\"");
+        my @indexes = grep { $_->{is_unique} }
+            DBIx::Diff::Schema::list_table_indexes(
+            $self->{dbh1}, $table);
+        my $cols_s = '';
+        if (@indexes) {
+            $cols_s = join(",", map {qq("$_")} @{ $indexes[0]{columns} });
+        }
+
+        my $sth = $self->{dbh2}->prepare(
+            "SELECT * FROM \"$table\"".($cols_s ? " ORDER BY $cols_s" : ""));
         $sth->execute;
         my $rownum = 0;
         while (1) {
@@ -230,7 +259,20 @@ sub _diff_db {
         sort @all_tables;
     };
 
+  TABLE:
     for my $table (@all_tables) {
+        if ($self->{include_tables} && @{ $self->{include_tables} }) {
+            unless (grep { $_ eq $table } @{ $self->{include_tables} }) {
+                log_trace "Skipping table $table (not in include_tables)";
+                next TABLE;
+            }
+        }
+        if ($self->{exclude_tables} && @{ $self->{exclude_tables} }) {
+            if (grep { $_ eq $table } @{ $self->{exclude_tables} }) {
+                log_trace "Skipping table $table (in exclude_tables)";
+                next TABLE;
+            }
+        }
         my $in_db1 = grep { $_ eq $table } @tables1;
         my $in_db2 = grep { $_ eq $table } @tables2;
         if ($in_db1 && $in_db2) {
@@ -273,7 +315,7 @@ sub diffdb {
     require File::Temp;
 
     my %args = @_;
-    my $action = $args{action};
+    my $action = delete $args{action};
     my $self = bless {%args}, __PACKAGE__;
 
     unless ($self->{dbh1}) {
@@ -310,9 +352,8 @@ sub diffdb {
         unless $self->{dbh1} && $self->{dbh2};
 
     $self->{tempdir} = File::Temp::tempdir(CLEANUP => $ENV{DEBUG});
-    $self->{diff_command} = $args{diff_command} // 'diff';
-    $self->{row_as} = $args{row_as} // 'one-line-json';
-
+    $self->{diff_command} //= 'diff';
+    $self->{row_as} //= 'one-line-json';
     $self->_diff_db;
 }
 
