@@ -43,34 +43,6 @@ our %args_common = (
         schema => ['str*', in=>['json-one-line', 'json-card']], # XXX yaml, csv, tsv, ...
         default => 'json-one-line',
     },
-    include_tables => {
-        'x.name.is_plural' => 1,
-        'x.name.singular' => 'include_table',
-        schema => ['array*', of=>'str*'], # XXX completion
-        cmdline_aliases => {t=>{}},
-        tags => ['category:filtering'],
-    },
-    exclude_tables => {
-        'x.name.is_plural' => 1,
-        'x.name.singular' => 'exclude_table',
-        schema => ['array*', of=>'str*'], # XXX completion
-        cmdline_aliases => {T=>{}},
-        tags => ['category:filtering'],
-    },
-    include_columns => {
-        'x.name.is_plural' => 1,
-        'x.name.singular' => 'include_column',
-        schema => ['array*', of=>'str*'], # XXX completion
-        cmdline_aliases => {c=>{}},
-        tags => ['category:filtering'],
-    },
-    exclude_columns => {
-        'x.name.is_plural' => 1,
-        'x.name.singular' => 'exclude_column',
-        schema => ['array*', of=>'str*'], # XXX completion
-        cmdline_aliases => {C=>{}},
-        tags => ['category:filtering'],
-    },
 
     # XXX add arg: include table pattern
     # XXX add arg: exclude table pattern
@@ -162,6 +134,41 @@ our %args_connect_sqlite = (
     },
 );
 
+our %args_diff = (
+    include_tables => {
+        'x.name.is_plural' => 1,
+        'x.name.singular' => 'include_table',
+        schema => ['array*', of=>'str*'], # XXX completion
+        cmdline_aliases => {t=>{}},
+        tags => ['category:filtering'],
+    },
+    exclude_tables => {
+        'x.name.is_plural' => 1,
+        'x.name.singular' => 'exclude_table',
+        schema => ['array*', of=>'str*'], # XXX completion
+        cmdline_aliases => {T=>{}},
+        tags => ['category:filtering'],
+    },
+    include_columns => {
+        'x.name.is_plural' => 1,
+        'x.name.singular' => 'include_column',
+        schema => ['array*', of=>'str*'], # XXX completion
+        cmdline_aliases => {c=>{}},
+        tags => ['category:filtering'],
+    },
+    exclude_columns => {
+        'x.name.is_plural' => 1,
+        'x.name.singular' => 'exclude_column',
+        schema => ['array*', of=>'str*'], # XXX completion
+        cmdline_aliases => {C=>{}},
+        tags => ['category:filtering'],
+    },
+    order_by => {
+        schema => ['str*'],
+        tags => ['category:ordering'],
+    },
+);
+
 sub __json_encode {
     state $json = do {
         require JSON::MaybeXS;
@@ -197,7 +204,7 @@ sub _diff_table {
     my ($self, $table, $table1_exists, $table2_exists) = @_;
 
     my $fname1 = "$self->{tempdir}/db1.$table".($table1_exists ? '' : '.doesnt_exist');
-    my $order_cols_s = '';
+    my $order_by = $self->{order_by} // '';
 
   CREATE_FILE1: {
         open my $fh, ">", $fname1;
@@ -216,16 +223,18 @@ sub _diff_table {
         }
         die "No columns to select" unless @columns;
 
-        my @indexes = grep { $_->{is_unique} }
-            DBIx::Diff::Schema::list_table_indexes(
+        unless (length $order_by) {
+            my @indexes = grep { $_->{is_unique} }
+                DBIx::Diff::Schema::list_table_indexes(
             $self->{dbh1}, $table);
-        if (@indexes) {
-            $order_cols_s = join(",", map {qq("$_")} @{ $indexes[0]{columns} });
+            if (@indexes) {
+                $order_by = join(",", map {qq("$_")} @{ $indexes[0]{columns} });
+            }
         }
 
         my $sth = $self->{dbh1}->prepare(
             "SELECT ".join(",", map {qq("$_->{COLUMN_NAME}")} @columns).
-                " FROM \"$table\"".($order_cols_s ? " ORDER BY $order_cols_s" : ""));
+                " FROM \"$table\"".($order_by ? " ORDER BY $order_by" : ""));
         $sth->execute;
         my $rownum = 0;
         while (1) {
@@ -254,17 +263,9 @@ sub _diff_table {
         }
         die "No columns to select" unless @columns;
 
-        #my @indexes = grep { $_->{is_unique} }
-        #    DBIx::Diff::Schema::list_table_indexes(
-        #    $self->{dbh1}, $table);
-        #my $order_cols_s = '';
-        #if (@indexes) {
-        #    $order_cols_s = join(",", map {qq("$_")} @{ $indexes[0]{columns} });
-        #}
-
         my $sth = $self->{dbh2}->prepare(
             "SELECT ".join(",", map {qq("$_->{COLUMN_NAME}")} @columns).
-                " FROM \"$table\"".($order_cols_s ? " ORDER BY $order_cols_s" : ""));
+                " FROM \"$table\"".($order_by ? " ORDER BY $order_by" : ""));
         $sth->execute;
         my $rownum = 0;
         while (1) {
@@ -342,6 +343,7 @@ _
     args => {
         %args_common,
         %args_connect_dbi,
+        %args_diff,
     },
 
     "cmdline.skip_format" => 1,
@@ -412,6 +414,7 @@ _
     args => {
         %args_common,
         %args_connect_sqlite,
+        %args_diff,
     },
 
     "cmdline.skip_format" => 1,
