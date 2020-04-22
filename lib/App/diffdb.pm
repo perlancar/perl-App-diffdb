@@ -57,6 +57,20 @@ our %args_common = (
         cmdline_aliases => {T=>{}},
         tags => ['category:filtering'],
     },
+    include_columns => {
+        'x.name.is_plural' => 1,
+        'x.name.singular' => 'include_column',
+        schema => ['array*', of=>'str*'], # XXX completion
+        cmdline_aliases => {c=>{}},
+        tags => ['category:filtering'],
+    },
+    exclude_columns => {
+        'x.name.is_plural' => 1,
+        'x.name.singular' => 'exclude_column',
+        schema => ['array*', of=>'str*'], # XXX completion
+        cmdline_aliases => {C=>{}},
+        tags => ['category:filtering'],
+    },
 
     # XXX add arg: include table pattern
     # XXX add arg: exclude table pattern
@@ -183,20 +197,35 @@ sub _diff_table {
     my ($self, $table, $table1_exists, $table2_exists) = @_;
 
     my $fname1 = "$self->{tempdir}/db1.$table".($table1_exists ? '' : '.doesnt_exist');
+    my $order_cols_s = '';
+
   CREATE_FILE1: {
         open my $fh, ">", $fname1;
         last unless $table1_exists;
 
+        my @columns;
+      COLUMN:
+        for my $column (DBIx::Diff::Schema::list_columns($self->{dbh1}, $table)) {
+            if ($self->{include_columns} && @{ $self->{include_columns} }) {
+                next COLUMN unless grep { $column->{COLUMN_NAME} eq $_ } @{ $self->{include_columns} };
+            }
+            if ($self->{exclude_columns} && @{ $self->{exclude_columns} }) {
+                next COLUMN if grep { $column->{COLUMN_NAME} eq $_ } @{ $self->{exclude_columns} };
+            }
+            push @columns, $column;
+        }
+        die "No columns to select" unless @columns;
+
         my @indexes = grep { $_->{is_unique} }
             DBIx::Diff::Schema::list_table_indexes(
             $self->{dbh1}, $table);
-        my $cols_s = '';
         if (@indexes) {
-            $cols_s = join(",", map {qq("$_")} @{ $indexes[0]{columns} });
+            $order_cols_s = join(",", map {qq("$_")} @{ $indexes[0]{columns} });
         }
 
         my $sth = $self->{dbh1}->prepare(
-            "SELECT * FROM \"$table\"".($cols_s ? " ORDER BY $cols_s" : ""));
+            "SELECT ".join(",", map {qq("$_->{COLUMN_NAME}")} @columns).
+                " FROM \"$table\"".($order_cols_s ? " ORDER BY $order_cols_s" : ""));
         $sth->execute;
         my $rownum = 0;
         while (1) {
@@ -212,16 +241,30 @@ sub _diff_table {
         open my $fh, ">", $fname2;
         last unless $table2_exists;
 
-        my @indexes = grep { $_->{is_unique} }
-            DBIx::Diff::Schema::list_table_indexes(
-            $self->{dbh1}, $table);
-        my $cols_s = '';
-        if (@indexes) {
-            $cols_s = join(",", map {qq("$_")} @{ $indexes[0]{columns} });
+        my @columns;
+      COLUMN:
+        for my $column (DBIx::Diff::Schema::list_columns($self->{dbh2}, $table)) {
+            if ($self->{include_columns} && @{ $self->{include_columns} }) {
+                next COLUMN unless grep { $column->{COLUMN_NAME} eq $_ } @{ $self->{include_columns} };
+            }
+            if ($self->{exclude_columns} && @{ $self->{exclude_columns} }) {
+                next COLUMN if grep { $column->{COLUMN_NAME} eq $_ } @{ $self->{exclude_columns} };
+            }
+            push @columns, $column;
         }
+        die "No columns to select" unless @columns;
+
+        #my @indexes = grep { $_->{is_unique} }
+        #    DBIx::Diff::Schema::list_table_indexes(
+        #    $self->{dbh1}, $table);
+        #my $order_cols_s = '';
+        #if (@indexes) {
+        #    $order_cols_s = join(",", map {qq("$_")} @{ $indexes[0]{columns} });
+        #}
 
         my $sth = $self->{dbh2}->prepare(
-            "SELECT * FROM \"$table\"".($cols_s ? " ORDER BY $cols_s" : ""));
+            "SELECT ".join(",", map {qq("$_->{COLUMN_NAME}")} @columns).
+                " FROM \"$table\"".($order_cols_s ? " ORDER BY $order_cols_s" : ""));
         $sth->execute;
         my $rownum = 0;
         while (1) {
