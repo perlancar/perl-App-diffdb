@@ -408,10 +408,6 @@ _
 
     args_rels => {
     },
-
-    links => [
-        {url=>'prog:diff'},
-    ],
 };
 sub diffdb_sqlite {
     my %args = @_;
@@ -469,10 +465,6 @@ _
 
     args_rels => {
     },
-
-    links => [
-        {url=>'prog:diff'},
-    ],
 };
 sub diffdbtable {
     require DBI;
@@ -532,7 +524,7 @@ sub diffdbtable_sqlite {
     my %args = @_;
 
     my $dsn1 = "dbi:SQLite:dbname=".delete($args{dbpath1});
-    my $dsn2 = "dbi:SQLite:dbname=".delete($args{dbpath2}) if defined $args{dbpath2};
+    my $dsn2; $dsn2 = "dbi:SQLite:dbname=".delete($args{dbpath2}) if defined $args{dbpath2};
     diffdbtable(
         %args,
         dsn1 => $dsn1,
